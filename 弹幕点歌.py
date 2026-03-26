@@ -322,7 +322,7 @@ async def on_danmaku(event):
                 print(f"❌ 视频 {bv_id} 无效或解析失败: {v_err}")
         else:     
             user_uid = info[2][0]
-            if user_uid ==  and content.startswith("切歌"): #此处输入自己的uid
+            if user_uid ==  and content.startswith("切歌"): #此处输入自己的uid（两个等于号后）
                 match = re.match(r'^切歌\s*(\d+)$', content)
                 if match:
                     try:
