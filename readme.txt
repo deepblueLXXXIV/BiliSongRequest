@@ -1,4 +1,4 @@
-本弹幕点歌机基于python3.12，有bug请告知
+本弹幕点歌机基于python3.12，仅支持播放b站视频音乐，有bug请告知
 
 进入https://www.python.org/downloads/release/python-31312/
 下载自己对应系统的安装包，这里仅以windows64做示范
