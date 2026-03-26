@@ -16,7 +16,7 @@ python3.12 -m venv venv
 .\venv\Scripts\Activate.ps1
 .\python.exe .\弹幕点歌.py
 
-运行时必定报错说一些package不存在，请安装对应的dependencies
+运行时必定报错说一些package不存在，请pip install安装对应的dependencies
 
 报错全解决后
 还是运行上面命令
