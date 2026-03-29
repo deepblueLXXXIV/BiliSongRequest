@@ -30,16 +30,5 @@ uid为你进入个人空间后https://space.bilibili.com/后面的一串数字
 切歌指令只有主播可使用，格式为
 切歌+数字（0为当前，其他数字为对应队列）
 
-生成exe的打包命令如下（注意，需要注释掉所有print，exe双击运行print语句过多会导致程序闪退，python环境运行没有此问题）
-python -m PyInstaller -D `
---collect-all bilibili_api `
---collect-all selenium `
---collect-submodules aiohttp `
---hidden-import brotli `
---hidden-import aiohttp `
---hidden-import json `
---hidden-import win32timezone `
---clean `
---workpath ./build `
---distpath ./dist `
-.\弹幕点歌.py
+生成exe的打包命令如下：
+python -m PyInstaller -D --collect-all bilibili_api --collect-all selenium --debug=all .\弹幕点歌new.py
