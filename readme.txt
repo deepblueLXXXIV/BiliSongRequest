@@ -30,9 +30,16 @@ uid为你进入个人空间后https://space.bilibili.com/后面的一串数字
 切歌指令只有主播可使用，格式为
 切歌+数字（0为当前，其他数字为对应队列）
 
-注：pyinstaller打包后的exe文件疑似有以下问题导致点歌队列窗口退出，请用powershell cd到exe所在目录运行
-
-1. 闪退的根本原因：管道阻塞 (Pipe Deadlock)
-你在调用 ffplay（或播放器）时设置了 stdout=subprocess.PIPE 和 stderr=subprocess.PIPE，但代码中没有任何地方去读取这些管道里的数据。
-命令行运行时：父进程（CMD）会帮忙处理一部分标准流，压力较小。
-双击运行时：Windows 为 .exe 分配的管道缓冲区非常小（通常只有几 KB）。ffplay 播放音频时会不断产生日志信息（帧率、时间戳、码率）。一旦缓冲区塞满，ffplay 进程会卡死，进而导致 Python 主线程在等待子进程响应时崩溃或被系统判定无响应强制关闭
+生成exe的打包命令如下（注意，需要注释掉所有print，exe双击运行print语句过多会导致程序闪退，python环境运行没有此问题）
+python -m PyInstaller -D `
+--collect-all bilibili_api `
+--collect-all selenium `
+--collect-submodules aiohttp `
+--hidden-import brotli `
+--hidden-import aiohttp `
+--hidden-import json `
+--hidden-import win32timezone `
+--clean `
+--workpath ./build `
+--distpath ./dist `
+.\弹幕点歌.py
