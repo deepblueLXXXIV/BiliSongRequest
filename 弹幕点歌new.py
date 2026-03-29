@@ -13,6 +13,10 @@ import sys
 import traceback
 import logging
 
+import queue
+# 专门给 UI 用的同步队列
+ui_update_queue = queue.Queue()
+
 queue_lock = asyncio.Lock()
 driver_lock = asyncio.Lock()
 
@@ -114,10 +118,28 @@ def smart_truncate(text, max_px, current_font):
         temp_text = temp_text[:-1]
     
     return temp_text + "..."
-    
+
+def get_safe_song_list():
+    # 使用之前定义的 queue_lock 确保读取时数据没在变
+    # 但因为 after 里的函数不能是 async，我们这里用一个简单的 copy 技巧
+    try:
+        return list(song_list) # 快速复制一份快照
+    except:
+        return []
+   
 # --- UI 界面线程：显示点歌列表 ---
 def create_display_window():
     root = tk.Tk()
+    
+    # 强制拦截所有 Tcl 内部错误，防止窗口静默消失
+    def report_callback_exception(self, exc, val, tb):
+        import traceback
+        err = traceback.format_exception(exc, val, tb)
+        with open("tk_error.log", "a") as f:
+            f.write("".join(err))
+    
+    tk.Tk.report_callback_exception = report_callback_exception      
+    
     root.title("点歌队列")
     
     # root.overrideredirect(True) # 注释掉这一行
@@ -158,48 +180,59 @@ def create_display_window():
 
     def scroll_logic():
         global current_song_text
-        
-        raw_content = f"▶{song_list[0]}" if song_list else "暂无歌曲播放，等待点歌..."
-        # 拼接两遍，中间加空格
-        display_title = raw_content + "    " + raw_content + "    " if song_list else raw_content
-
-        if display_title != current_song_text:
-            current_song_text = display_title
-            canvas.itemconfig(text_id, text=current_song_text)
-            canvas.coords(text_id, 0, 20)
-
-        if song_list:
-            canvas.move(text_id, -1, 0)
-            pos = canvas.bbox(text_id)
+        try:
+            safe_list = list(song_list)
             
-            # 计算单段文本的宽度 (总宽除以2)
-            total_width = pos[2] - pos[0]
-            single_width = total_width / 2
-            
-            # 当移动距离超过单段宽度时，瞬间拉回 0
-            if abs(pos[0]) >= single_width:
+            has_songs = len(safe_list) > 0
+            raw_content = f"▶{safe_list[0]}" if has_songs else "暂无歌曲播放，等待点歌..."
+            # 拼接两遍，中间加空格
+            display_title = raw_content + "    " + raw_content + "    " if safe_list else raw_content
+
+            if display_title != current_song_text:
+                current_song_text = display_title
+                canvas.itemconfig(text_id, text=current_song_text)
                 canvas.coords(text_id, 0, 20)
 
-        root.after(30, scroll_logic)
+            if safe_list:
+                canvas.move(text_id, -1, 0)
+                pos = canvas.bbox(text_id)
+                
+                # 计算单段文本的宽度 (总宽除以2)
+                total_width = pos[2] - pos[0]
+                single_width = total_width / 2
+                
+                # 当移动距离超过单段宽度时，瞬间拉回 0
+                if abs(pos[0]) >= single_width:
+                    canvas.coords(text_id, 0, 20)
+        except Exception:
+            pass
+        finally:
+            root.after(35, scroll_logic)
 
     my_font = tkfont.Font(family="微软雅黑", size=9)
 
+    # --- 4. 修改 UI 刷新逻辑 (安全读取) ---
     def update_list():
-        list_display.config(state=tk.NORMAL)
-        list_display.delete('1.0', tk.END)
-        
-        # 获取窗口当前的实际宽度，减去左右边距 (例如 280-40=240)
-        max_display_width = 350 
-        
-        waiting_list = song_list[1:]
-        if waiting_list:
-            for i, name in enumerate(waiting_list, 1):
-                # 核心：按像素测量并截断
-                display_name = smart_truncate(name, max_display_width, my_font)
-                list_display.insert(tk.END, f" {i:02d}. {display_name}\n")
-
-        list_display.config(state=tk.DISABLED)
-        root.after(1000, update_list)
+        """由 Tkinter 主线程定时调用，安全同步数据"""
+        try:
+            # 只有在收到信号或者定时检查时，才‘拷贝’一份列表快照
+            # 这样即便异步线程正在修改 song_list，UI 线程拿到的也是安全的副本
+            safe_list_snapshot = list(song_list) 
+            
+            list_display.config(state=tk.NORMAL)
+            list_display.delete('1.0', tk.END)
+            
+            if len(safe_list_snapshot) > 1:
+                waiting_list = safe_list_snapshot[1:]
+                for i, name in enumerate(waiting_list, 1):
+                    # 使用快照数据更新 UI
+                    display_name = smart_truncate(name, 350, my_font)
+                    list_display.insert(tk.END, f" {i:02d}. {display_name}\n")
+        except Exception as e:
+            pass 
+        finally:
+            list_display.config(state=tk.DISABLED)
+            root.after(1000, update_list) # 每秒同步一次
 
     # --- 窗口拖动逻辑 ---
     def start_move(event): root.x, root.y = event.x, event.y
@@ -214,6 +247,7 @@ def create_display_window():
 
 # --- 消费者：负责浏览器控制 (已优化版) ---
 async def music_player_worker():
+    await asyncio.sleep(5)
     global driver
     # 建议在外部定义全局变量: 
     # queue_lock = asyncio.Lock()
@@ -382,11 +416,13 @@ async def on_danmaku(event):
                     if content.startswith("点歌"):
                         song_queue_data.append(song_item)
                         song_list.append(final_title)         
+                        ui_queue.put("REFRESH") 
                         #print(f"📩 {user_name}点歌 {final_title}")               
                     elif is_vip and content.startswith("插歌"):
                         pos = 1 if len(song_queue_data) > 0 else 0
                         song_queue_data.insert(pos, song_item)
-                        song_list.insert(pos, final_title)             
+                        song_list.insert(pos, final_title)        
+                        ui_queue.put("REFRESH")                         
                         #print(f"📩 {user_name}插歌 {final_title}")   
             except Exception as v_err:
                 dummy = 0
@@ -450,28 +486,36 @@ async def on_danmaku(event):
         dummy = 0
         #print(f"🚨 弹幕解析异常: {e}")
 
-if __name__ == '__main__':
-    # 1. 启动 UI 线程（保持不变）
-    ui_thread = threading.Thread(target=create_display_window, daemon=True)
-    ui_thread.start()
-
-    # 2. 显式创建并设置事件循环
-    loop = asyncio.new_event_loop() 
-    asyncio.set_event_loop(loop) # 将新循环设置为当前上下文的循环
-
+# --- 3. 异步逻辑包装函数 ---
+def run_async_background():
+    """在子线程中运行所有异步逻辑"""
+    new_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(new_loop)
+    
+    async def main_task():
+        # 同时启动播放器和弹幕监听
+        await asyncio.gather(
+            music_player_worker(),
+            room.connect()
+        )
+    
     try:
-        # 使用 loop.create_task 提交后台任务
-        loop.create_task(music_player_worker())
-        
-        # 启动弹幕连接（假设 room.connect() 是一个协程）
-        # run_until_complete 会一直运行直到 connect 结束（即直播间断开）
-        loop.run_until_complete(room.connect())
-        
-    #except KeyboardInterrupt:
-        #print("\n正在安全关闭...")
-        #dummy = 0
-    finally:
-        # 清理工作
-        if 'driver' in globals() and driver:
-            driver.quit()
-        loop.close()
+        new_loop.run_until_complete(main_task())
+    except Exception as e:
+        with open("async_crash.log", "a") as f:
+            f.write(f"Background Error: {e}\n")
+
+
+
+# --- 5. 程序总入口 ---
+if __name__ == '__main__':
+    # A. 启动异步子线程
+    logic_thread = threading.Thread(target=run_async_background, daemon=True)
+    logic_thread.start()
+
+    # B. 主线程启动 UI (必须在 __main__ 的最后)
+    try:
+        create_display_window() # 确保此函数最后是 root.mainloop()
+    except Exception as e:
+        with open("ui_crash.log", "a") as f:
+            f.write(f"UI Mainloop Error: {e}")
