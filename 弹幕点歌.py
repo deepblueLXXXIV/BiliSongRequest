@@ -10,6 +10,69 @@ import json
 import os
 import sys
 
+import traceback
+import logging
+
+
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+
+chrome_options = Options()
+# 关键：禁用沙盒和开发者警告，防止打包后的权限冲突
+chrome_options.add_argument('--no-sandbox')
+chrome_options.add_argument('--disable-dev-shm-usage')
+# 关键：防止浏览器在后台播放时被系统判定为“不活跃”而挂起
+chrome_options.add_argument('--disable-background-timer-throttling')
+chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+chrome_options.add_argument('--disable-renderer-backgrounding')
+
+# 如果你是手动指定 driver 路径，确保打包后路径正确
+# 使用以下方式动态获取驱动路径（避免打包后找不到驱动）
+
+def get_driver_path():
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, 'chromedriver.exe')
+    return 'chromedriver.exe'
+
+# 初始化 driver 时显式捕获异常
+try:
+    driver = webdriver.Chrome(options=chrome_options)
+except Exception as e:
+    with open("driver_error.log", "a") as f:
+        f.write(f"Driver Init Error: {e}")
+
+sys.setrecursionlimit(5000) # 适当调高限制
+
+# 获取 exe 所在目录
+def get_base_path():
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+# 配置日志文件在 exe 同级目录
+log_path = os.path.join(get_base_path(), "crash_report.log")
+
+# 核心：将系统所有的 print 和报错都强制写进文件
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a", encoding="utf-8")
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush() # 实时刷新，确保闪退前能写入
+    def flush(self):
+        pass
+
+sys.stdout = Logger(log_path)
+sys.stderr = Logger(log_path) # 这一步最关键，捕获红色报错
+
+logging.info("程序启动排查...")
+
+
+
+os.chdir(os.path.dirname(os.path.abspath(sys.argv[0])))
+
 # 获取程序运行目录（兼容打包后的 exe）
 if getattr(sys, 'frozen', False):
     base_path = os.path.dirname(sys.executable)
@@ -254,6 +317,7 @@ async def music_player_worker():
                 await asyncio.sleep(0.2)
 
         except Exception as e:
+            #dummy = 0
             print(f"播放过程异常: {e}")
         finally:
             if song_queue_data:
@@ -350,6 +414,7 @@ async def on_danmaku(event):
                     song_list.insert(1, final_title)             
                     print(f"📩 {user_name}插歌 {final_title}")   
             except Exception as v_err:
+                #dummy = 0
                 # 捕获特定的视频不存在或网络错误
                 print(f"❌ 视频 {bv_id} 无效或解析失败: {v_err}")
         else:     
@@ -366,7 +431,7 @@ async def on_danmaku(event):
                                 print(f"🛑 管理员停止了当前播放: {song_list[0]}")
                                 # 触发切歌事件，worker 会执行 finally 里的 pop(0)
                                 skip_event.set() 
-                            else:
+                            #else:
                                 print("⚠️ 当前没有正在播放的歌曲")
                 
                         # --- 切歌N：删除排队中的歌曲 ---
@@ -375,7 +440,7 @@ async def on_danmaku(event):
                             removed_song = song_list.pop(index)
                             print(f"【系统】已删除第 {index} 首歌曲：{removed_song}")
                             print(f"当前队列：{song_list}")
-                        else:
+                        #else:
                             print(f"【错误】序号 {index} 超出队列范围")
                     except ValueError:
                         pass
@@ -406,6 +471,7 @@ async def on_danmaku(event):
                 
     except Exception as e:
         # 顶层捕获，防止解析弹幕结构本身出错导致脚本崩溃
+        #dummy = 0
         print(f"🚨 弹幕解析异常: {e}")
 
 if __name__ == '__main__':
@@ -427,6 +493,7 @@ if __name__ == '__main__':
         
     except KeyboardInterrupt:
         print("\n正在安全关闭...")
+        #dummy = 0
     finally:
         # 清理工作
         if 'driver' in globals() and driver:
