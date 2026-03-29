@@ -31,4 +31,5 @@ uid为你进入个人空间后https://space.bilibili.com/后面的一串数字
 切歌+数字（0为当前，其他数字为对应队列）
 
 生成exe的打包命令如下：
-python -m PyInstaller -D --collect-all bilibili_api --collect-all selenium --debug=all .\弹幕点歌new.py
+python -m PyInstaller -D --collect-all bilibili_api --collect-all selenium .\弹幕点歌new.py
+（测试加--debug=all ）
