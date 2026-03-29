@@ -30,7 +30,7 @@ uid为你进入个人空间后https://space.bilibili.com/后面的一串数字
 切歌指令只有主播可使用，格式为
 切歌+数字（0为当前，其他数字为对应队列）
 
-注：pyinstaller打包后的exe文件疑似有以下问题，用命令行cd到exe所在目录运行
+注：pyinstaller打包后的exe文件疑似有以下问题导致点歌队列窗口退出，请用powershell cd到exe所在目录运行
 
 1. 闪退的根本原因：管道阻塞 (Pipe Deadlock)
 你在调用 ffplay（或播放器）时设置了 stdout=subprocess.PIPE 和 stderr=subprocess.PIPE，但代码中没有任何地方去读取这些管道里的数据。
