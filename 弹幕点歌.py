@@ -10,8 +10,6 @@ import json
 import os
 import sys
 
-os.chdir(os.path.dirname(os.path.abspath(sys.argv[0])))
-
 # 获取程序运行目录（兼容打包后的 exe）
 if getattr(sys, 'frozen', False):
     base_path = os.path.dirname(sys.executable)
