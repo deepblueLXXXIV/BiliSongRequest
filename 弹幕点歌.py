@@ -5,11 +5,43 @@ from selenium import webdriver
 from bilibili_api import live, video, sync, Credential, search
 from tkinter import font as tkfont
 import re
-    
-# ================= 配置区 =================
-ROOM_ID = #此处填写直播间id
-SESSDATA = "" #此处在引号内输入你自己的SESSDATA
+
+import json
+import os
+import sys
+
+# 获取程序运行目录（兼容打包后的 exe）
+if getattr(sys, 'frozen', False):
+    base_path = os.path.dirname(sys.executable)
+else:
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+config_path = os.path.join(base_path, "config.json")
+
+# 默认配置模板
+default_config = {
+    "ROOM_ID": "替换为直播间ID",
+    "SESSDATA": "替换为SESSDATA",
+    "HOST_UID": "替换为主播UID"
+}
+
+# 读取或创建配置文件
+if not os.path.exists(config_path):
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(default_config, f, indent=4, ensure_ascii=False)
+    print(f"首次运行已生成配置文件: {config_path}")
+    print("请填入配置后重新运行程序。")
+    sys.exit()
+
+with open(config_path, "r", encoding="utf-8") as f:
+    config = json.load(f)
+
+# 使用配置变量
+ROOM_ID = config.get("ROOM_ID")
+SESSDATA = config.get("SESSDATA")
 credential = Credential(sessdata=SESSDATA)
+HOST_UID = int(config.get("HOST_UID", 0))
+
 # ==========================================
 
 song_queue_data = []
@@ -322,7 +354,7 @@ async def on_danmaku(event):
                 print(f"❌ 视频 {bv_id} 无效或解析失败: {v_err}")
         else:     
             user_uid = info[2][0]
-            if user_uid ==  and content.startswith("切歌"): #此处输入自己的uid（两个等于号后）
+            if user_uid == HOST_UID and content.startswith("切歌"):
                 match = re.match(r'^切歌\s*(\d+)$', content)
                 if match:
                     try:
