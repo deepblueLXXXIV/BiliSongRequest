@@ -319,41 +319,48 @@ room = live.LiveDanmaku(ROOM_ID, credential=credential)
 @room.on('DANMU_MSG')
 async def on_danmaku(event):
     try:
-        # 1. 提取弹幕文本 (确保兼容不同版本的 info 结构)
+        # 1. 提取弹幕基本信息
         info = event['data']['info']       
         content = str(info[1]) if isinstance(info, list) else "" 
+        user_uid = info[2][0]
+        user_name = info[2][1]
+        
+        # --- 新增：身份判定 ---
+        is_admin = info[2][2] == 1  # info[2][2] 为 1 代表是房管
+        is_owner = user_uid == HOST_UID
+        has_privilege = is_admin or is_owner # 是否拥有管理权限
+        
         try:
-            privilege_type = info[7] 
+            privilege_type = info[7] # 大航海等级
         except (IndexError, TypeError):
             privilege_type = 0
-        is_vip = privilege_type > 0
+        is_vip = privilege_type > 0 # 是否是舰长以上
         
-        
-                
+        # --- 点歌/插歌逻辑 (保持不变) ---
+				
         if content.startswith("点歌 ") or content.startswith("插歌 "):
-            # 1. 定义正则：强制要求 点歌/插歌 后面紧跟至少一个空格
-            # 使用了非捕获组 (?:...) 来匹配关键词
+																						 
+															  
             pattern = r"(BV[a-zA-Z0-9]+)(?:\s*[pP_](\d+))?"
             match = re.search(pattern, content, re.IGNORECASE)            
 
             if match:                
-                bv_id = match.group(1) # 获取匹配到的 BV 号
-                p_index = int(match.group(2) if match.group(2) else "1") # 没传P数默认第1P
-                # 如果正则没搜到 BV 号，但以关键词+空格开头，走关键字搜索逻辑
+                bv_id = match.group(1)
+                p_index = int(match.group(2) if match.group(2) else "1")
+													
             else:
                 keyword = content[2:].strip()
                 if keyword:
                     res = await search.search_by_type(keyword, search_type=search.SearchObjectType.VIDEO)
                     if res['result']:
-                        bv_id = await get_valid_video(res['result']) # 取搜索结果最靠前的有效视频
+                        bv_id = await get_valid_video(res['result'])
                         p_index = 1                
                 
-            # 3. 异步获取视频信息
+										 
             try:
                 v = video.Video(bvid=bv_id, credential=credential)
-                v_info = await v.get_info()
-                
-                # 处理分 P 逻辑
+                v_info = await v.get_info()				
+									
                 pages = v_info.get('pages', [])
                 if not pages:
                     print("❌ 该视频没有内容")
@@ -363,19 +370,16 @@ async def on_danmaku(event):
                 if p_index > len(pages) or p_index < 1:
                     print(f"❌ 视频只有 {len(pages)} P，你点的第 {p_index} P 不存在")
                     return
-
-                target_page = pages[p_index - 1] # 数组下标从0开始
-                part_title = target_page['part'] # 获取这一P的小标题
-                
-                # 组合最终标题：如果只有1P就用主标题，多P则加上小标题
+                    
+                target_page = pages[p_index - 1]
+                part_title = target_page['part']
+				
+																							 
                 final_title = v_info['title'] if len(pages) == 1 else f"{v_info['title']} (P{p_index}-{part_title})"
-                duration = target_page['duration'] # 分P的时长
+                duration = target_page['duration']									  
                 
-                user_name = info[2][1]
-                
-                song_item = (bv_id, final_title, duration, p_index)
-                
-                # 4. 成功后入队
+                song_item = (bv_id, final_title, duration, p_index)                
+									
                 if content.startswith("点歌"):
                     song_queue_data.append(song_item)
                     song_list.append(final_title)         
@@ -385,63 +389,53 @@ async def on_danmaku(event):
                     song_list.insert(1, final_title)             
                     print(f"📩 {user_name}插歌 {final_title}")   
             except Exception as v_err:
-                # 捕获特定的视频不存在或网络错误
+															   
                 print(f"❌ 视频 {bv_id} 无效或解析失败: {v_err}")
-        else:     
-            user_uid = info[2][0]
-            if user_uid == HOST_UID and content.startswith("切歌"):
+
+        # --- 修改后的切歌逻辑 ---
+        elif content.startswith("切歌"):
+            # 只要是主播或者房管，就可以执行
+            if has_privilege:
+                # 匹配 "切歌" 或 "切歌 N"
                 match = re.match(r'^切歌\s*(\d+)$', content)
-                if match:
+                
+                # 情况 A：直接发送 "切歌"，默认切掉当前正在播放的 (等同于 切歌 0)
+                if content.strip() == "切歌":
+                    if song_queue_data:
+                        print(f"🛑 管理员 {user_name} 切歌: {song_list[0]}")
+                        skip_event.set() 
+                    else:
+                        print("⚠️ 当前没有正在播放的歌曲")
+                
+                # 情况 B：发送 "切歌 N"，删除队列中的某首歌
+                elif match:
                     try:
-                        # 提取序号并转为索引 (用户输入的 1 对应 list[0])
+																						
                         index = int(match.group(1))
-                        # --- 切歌0：停止当前播放 ---
+															  
                         if index == 0:
                             if song_queue_data:
-                                print(f"🛑 管理员停止了当前播放: {song_list[0]}")
-                                # 触发切歌事件，worker 会执行 finally 里的 pop(0)
-                                skip_event.set() 
-                            else:
-                                print("⚠️ 当前没有正在播放的歌曲")
-                
-                        # --- 切歌N：删除排队中的歌曲 ---
+                                print(f"🛑 管理员 {user_name} 停止了当前播放")
+																							 
+                                skip_event.set()
+																	
                         elif 1 <= index < len(song_list):
-                            song_queue_data.pop(index)
                             removed_song = song_list.pop(index)
-                            print(f"【系统】已删除第 {index} 首歌曲：{removed_song}")
-                            print(f"当前队列：{song_list}")
+                            song_queue_data.pop(index)
+															   
+                            print(f"【系统】管理员 {user_name} 已删除第 {index} 首：{removed_song}")
+																
                         else:
                             print(f"【错误】序号 {index} 超出队列范围")
                     except ValueError:
                         pass
-            # if is_vip and content.startswith("插歌"):
-                # match = BV_PATTERN.search(content)
-                
-                # if not match:
-                    # print(f"⚠️ 点歌格式错误，请发送：点歌 BVxxxxxxx")
-                    # return # 格式不对直接退出，不影响后续
-                    
-                # bv_id = match.group() # 获取匹配到的 BV 号
-                
-                # # 3. 异步获取视频信息
-                # try:
-                    # v = video.Video(bvid=bv_id, credential=credential)
-                    # v_info = await v.get_info()
-                    # title = v_info['title']
-                    # duration = v_info['duration']
-                    # user_name = info[2][1]
-                    
-                    # # 4. 成功后入队
-                    
+            else:
+                print(f"权限不足：用户 {user_name} 尝试切歌但不是房管")
 
-                    # print(f"📩 {user_name}点歌 {title}")
-                # except Exception as v_err:
-                    # # 捕获特定的视频不存在或网络错误
-                    # print(f"❌ 视频 {bv_id} 无效或解析失败: {v_err}")
-                
     except Exception as e:
-        # 顶层捕获，防止解析弹幕结构本身出错导致脚本崩溃
+																			   
         print(f"🚨 弹幕解析异常: {e}")
+
 
 if __name__ == '__main__':
     # 1. 启动 UI 线程（保持不变）
