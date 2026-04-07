@@ -1,8 +1,9 @@
+import random
 import asyncio
 import threading
 import tkinter as tk
 from selenium import webdriver
-from bilibili_api import live, video, sync, Credential, search
+from bilibili_api import live, video, sync, Credential, search, Danmaku
 from tkinter import font as tkfont
 import re
 
@@ -57,7 +58,14 @@ config_path = os.path.join(base_path, "config.json")
 default_config = {
     "ROOM_ID": "替换为直播间ID",
     "SESSDATA": "替换为SESSDATA",
-    "HOST_UID": "替换为主播UID"
+    "BILI_JCT": "替换为BILI_JCT",
+    "HOST_UID": "替换为主播UID",
+    "DEFAULT_PLAYLIST": [
+        "替换为BV号",
+        "替换为BV号",
+        "替换为BV号，可无限添加"
+    ],
+    "MAX_DURATION_MIN": "替换为可点播视频的最长分钟数，自设播放列表无此限制"
 }
 
 # 读取或创建配置文件
@@ -74,10 +82,18 @@ with open(config_path, "r", encoding="utf-8") as f:
 # 使用配置变量
 ROOM_ID = config.get("ROOM_ID")
 SESSDATA = config.get("SESSDATA")
-credential = Credential(sessdata=SESSDATA)
-HOST_UID = int(config.get("HOST_UID", 0))
+HOST_UID = int(config.get("HOST_UID"))
+BILI_JCT = config.get("BILI_JCT")
+credential = Credential(sessdata=SESSDATA, bili_jct=BILI_JCT)
+DEFAULT_PLAYLIST = config.get("DEFAULT_PLAYLIST", [])
+MAX_MIN = int(config.get("MAX_DURATION_MIN"))
+MAX_SECONDS = MAX_MIN * 60
+                 
 
 # ==========================================
+# --- 在函数外部定义，用于记忆播放历史 ---
+history_queue = [] 
+MAX_HISTORY = 5
 
 song_queue_data = []
 song_list = []  # 用于界面显示的列表
@@ -200,6 +216,61 @@ def create_display_window():
     update_list()
     root.mainloop()
 
+
+async def send_broadcast(message):
+    try:
+        # 1. 实例化直播间对象
+        room = live.LiveRoom(ROOM_ID, credential=credential)
+        
+        # 2. 关键：将字符串包装成 Danmaku 对象
+        # 17.x 版本要求发送的是对象，而不是纯文本
+        dm = Danmaku(text=message)
+        
+        # 3. 发送对象
+        await room.send_danmaku(dm)
+        print(f"💬 已发送弹幕反馈：{message}")
+    except Exception as e:
+        print(f"❌ 弹幕发送失败: {e}")
+        
+async def get_song_data(bv_id, p_index, credential, max_min_config, user_name, is_quiet):
+    """
+    is_quiet: 是否静默运行。True则不发送直播间弹幕提示。
+    """
+    try:
+        v = video.Video(bvid=bv_id, credential=credential)
+        v_info = await v.get_info()
+        
+        pages = v_info.get('pages', [])
+        if not pages:
+            if not is_quiet:
+                await send_broadcast(f"@{user_name} ❌ 视频内容为空或已失效")
+            return None
+        
+        # P数校验
+        if p_index > len(pages) or p_index < 1:
+            p_index = 1 # 自动纠正
+            
+        target_page = pages[p_index - 1]
+        duration = target_page['duration']
+        
+        # 时长校验
+        if max_min_config > 0 and duration > (max_min_config * 60):
+            if not is_quiet:
+                await send_broadcast(f"@{user_name} ❌ 歌曲太长({duration//60}分)，限时{max_min_config}分内")
+            return None
+            
+        part_title = target_page['part']
+        final_title = v_info['title'] if len(pages) == 1 else f"{v_info['title']} (P{p_index}-{part_title})"
+        
+        return (bv_id, final_title, duration, p_index)
+        
+    except Exception as e:
+        if not is_quiet:
+            await send_broadcast(f"@{user_name} ❌ 解析失败，请检查BV号是否正确")
+        print(f"❌ 获取视频信息异常: {e}")
+        return None
+
+
 # --- 消费者：负责浏览器控制 ---
 async def music_player_worker():
     global driver
@@ -215,13 +286,57 @@ async def music_player_worker():
         return
 
     while True:
+        # --- 核心：当队列为空时，解析主播歌单并补位 ---
         if not song_queue_data:
-            if driver.current_url != "about:blank":
-                driver.get("about:blank")
-            await asyncio.sleep(2)
+            DEFAULT_PLAYLIST = config.get("DEFAULT_PLAYLIST", [])
+            if DEFAULT_PLAYLIST:
+                # 1. 随机选一个配置项 (可能是 "BVxxx" 或 "BVxxx 2")
+                available = [item for item in DEFAULT_PLAYLIST if item not in history_queue]
+                raw_item = random.choice(available if available else DEFAULT_PLAYLIST)
+                
+                # 2. 正则解析 BV 号和 P 数 (参照你提供的点歌正则)
+                pattern = r"(BV[a-zA-Z0-9]+)(?:\s*[pP\s_](\d+))?"
+                match = re.search(pattern, str(raw_item), re.IGNORECASE)
+                
+                if match:
+                    bv_id = match.group(1)
+                    p_index = int(match.group(2)) if match.group(2) else 1
+                    
+                    # 记录历史
+                    history_queue.append(raw_item)
+                    if len(history_queue) > MAX_HISTORY: history_queue.pop(0)
+                    
+                    try:
+                        song_item = await get_song_data(bv_id, p_index, credential, 0, "系统", is_quiet=True)
+                        
+                        if song_item:
+                            final_title = song_item[1]
+                            song_queue_data.append(song_item)
+                            song_list.append(final_title)         
+                            print(f"💡 自动补位成功: {final_title}")
+                        
+                    except Exception as e:
+                        print(f"❌ 自动补位失败({bv_id}): {e}")
+                        await asyncio.sleep(2)
+                        continue
+                else:
+                    print(f"⚠️ config.json 中的格式错误: {raw_item}")
+                    continue
+            else:
+                if driver.current_url != "about:blank":
+                    driver.get("about:blank")
+                await asyncio.sleep(2)
+                continue
+                
+        if not song_queue_data:
             continue
 
-        bv_id, title, duration, p_index = song_queue_data[0]
+        # 3. 现在安全地取值
+        try:
+            bv_id, title, duration, p_index = song_queue_data[0]
+        except IndexError:
+            print("⚠️ 队列意外变空，跳过...")
+            continue
         
         try:
             url = f"https://www.bilibili.com/video/{bv_id}?p={p_index}"
@@ -338,8 +453,7 @@ async def on_danmaku(event):
         
         # --- 点歌/插歌逻辑 (保持不变) ---
 				
-        if content.startswith("点歌 ") or content.startswith("插歌 "):
-																						 
+        if content.startswith("点歌 ") or content.startswith("插歌 "):		 
 															  
             pattern = r"(BV[a-zA-Z0-9]+)(?:\s*[pP_](\d+))?"
             match = re.search(pattern, content, re.IGNORECASE)            
@@ -355,43 +469,26 @@ async def on_danmaku(event):
                     if res['result']:
                         bv_id = await get_valid_video(res['result'])
                         p_index = 1                
-                
-										 
+                				 
             try:
-                v = video.Video(bvid=bv_id, credential=credential)
-                v_info = await v.get_info()				
-									
-                pages = v_info.get('pages', [])
-                if not pages:
-                    print("❌ 该视频没有内容")
-                    return
+                song_item = await get_song_data(bv_id, p_index, credential, MAX_MIN, user_name, is_quiet=False)
                 
-                # 校验 P 数是否合法
-                if p_index > len(pages) or p_index < 1:
-                    print(f"❌ 视频只有 {len(pages)} P，你点的第 {p_index} P 不存在")
-                    return
-                    
-                target_page = pages[p_index - 1]
-                part_title = target_page['part']
-				
-																							 
-                final_title = v_info['title'] if len(pages) == 1 else f"{v_info['title']} (P{p_index}-{part_title})"
-                duration = target_page['duration']									  
-                
-                song_item = (bv_id, final_title, duration, p_index)                
-									
-                if content.startswith("点歌"):
-                    song_queue_data.append(song_item)
-                    song_list.append(final_title)         
-                    print(f"📩 {user_name}点歌 {final_title}")               
-                elif is_vip and content.startswith("插歌"):
-                    song_queue_data.insert(1, song_item)
-                    song_list.insert(1, final_title)             
-                    print(f"📩 {user_name}插歌 {final_title}")   
+                if song_item:  	
+                    final_title = song_item[1]
+                    if content.startswith("点歌"):
+                        song_queue_data.append(song_item)
+                        song_list.append(final_title)         
+                        print(f"📩 {user_name}点歌 {final_title}")               
+                    elif is_vip and content.startswith("插歌"):
+                        song_queue_data.insert(1, song_item)
+                        song_list.insert(1, final_title)             
+                        print(f"📩 {user_name}插歌 {final_title}")   
             except Exception as v_err:
 															   
                 print(f"❌ 视频 {bv_id} 无效或解析失败: {v_err}")
-
+        elif content.startswith("点歌") or content.startswith("插歌"):
+            await send_broadcast(f"@{user_name} ❌ 指令后必须加空格。示例：点歌 晴天")
+            print(f"⚠️ {user_name} 未加空格，已发送格式引导")
         # --- 修改后的切歌逻辑 ---
         elif content.startswith("切歌"):
             # 只要是主播或者房管，就可以执行
