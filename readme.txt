@@ -16,7 +16,7 @@ python3.12 -m venv venv
 还是运行上面命令
 
 第一次运行exe会生成config.json
-打开分别替换为以下内容
+替换说明如下
 直播间id为你自己直播时紧跟https://live.bilibili.com/后面的一串数字
 SESSDATA在你登录b站页面后按F12，点Application tab然后找到Cookies下任意bilibili.com结尾下的SESSDATA，复制粘贴
 BILI_JCT同SESSDATA在同一位置，复制粘贴，用于自动回复弹幕点歌格式错误等问题
