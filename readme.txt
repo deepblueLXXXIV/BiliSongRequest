@@ -16,7 +16,7 @@ python3.12 -m venv venv
 还是运行上面命令
 
 第一次运行exe会生成config.json
-打开分别替换为对应的直播间id，b站登录SESSDATA以及自己的uid
+打开分别替换为以下内容
 直播间id为你自己直播时紧跟https://live.bilibili.com/后面的一串数字
 SESSDATA在你登录b站页面后按F12，点Application tab然后找到Cookies下任意bilibili.com结尾下的SESSDATA，复制粘贴
 BILI_JCT同SESSDATA在同一位置，复制粘贴，用于自动回复弹幕点歌格式错误等问题
@@ -29,11 +29,16 @@ MAX_UDRATION_MIN为可点播视频最长分钟数，自定义歌单无此限制
 可以在直播间内发送弹幕测试
 点歌格式如下
 
-点歌+空格+BV号
+点歌+空格+BV号+P数（最后一个可选）
 点歌+空格+关键字 （会自动匹配相关度最高且未失效的视频）
 舰长可用插歌，格式同点歌
 切歌指令只有主播和房管可使用，格式为
 切歌+数字（0为当前，其他数字为对应队列）
+
+点歌 BV12inXzcEQc p18
+点歌 BV12inXzcEQc
+点歌 晴天
+切歌0
 
 生成exe的打包命令如下：
 python -m PyInstaller -D --collect-all bilibili_api --collect-all selenium .\弹幕点歌new.py
