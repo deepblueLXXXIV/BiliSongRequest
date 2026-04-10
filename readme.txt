@@ -15,7 +15,7 @@ python3.12 -m venv venv
 报错全解决后
 还是运行上面命令
 
-第一次运行exe会生成config.json
+第一次运行会生成config.json
 打开，替换说明如下
 直播间id为你自己直播时紧跟https://live.bilibili.com/后面的一串数字
 SESSDATA在你登录b站页面后按F12，点Application tab然后找到Cookies下任意bilibili.com结尾下的SESSDATA，复制粘贴
@@ -25,7 +25,7 @@ HOST_UID为你进入个人空间后https://space.bilibili.com/后面的一串数
 DEFAULT_PLAYLIST为主播自定义歌单，当前歌单为空时会随机抽取一首播放
 MAX_UDRATION_MIN为可点播视频最长分钟数，自定义歌单无此限制
 
-再运行exe即可使用
+再次输入命令 .\python.exe .\弹幕点歌.py
 可以在直播间内发送弹幕测试
 点歌格式如下
 
@@ -43,3 +43,4 @@ MAX_UDRATION_MIN为可点播视频最长分钟数，自定义歌单无此限制
 生成exe的打包命令如下：
 python -m PyInstaller -D --collect-all bilibili_api --collect-all selenium .\弹幕点歌new.py
 （测试加--debug=all ）
+双击运行exe同上，配置config.json（用于无python环境运行）
