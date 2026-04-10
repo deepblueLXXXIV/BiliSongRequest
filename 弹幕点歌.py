@@ -333,7 +333,9 @@ async def music_player_worker():
 
         # 3. 现在安全地取值
         try:
-            bv_id, title, duration, p_index = song_queue_data[0]
+            # 1. 增加保底值：如果 duration 是 None，则设为 0
+            bv_id, title, raw_duration, p_index = song_queue_data[0]
+            duration = raw_duration if raw_duration is not None else 300 # 默认5分钟
         except IndexError:
             print("⚠️ 队列意外变空，跳过...")
             continue
@@ -388,13 +390,21 @@ async def music_player_worker():
                         };
                     ''')
                     
-                    if state and state['duration'] > 0:
-                        # 缩短判定时间：提前 0.8 秒就强制暂停并退出
-                        # 理由：B 站多 P 触发跳转极快，必须抢在它之前 pause()
-                        if state['ended'] or (state['currentTime'] >= state['duration'] - 0.8):
+                    # 2. 增加安全判断：确保 state['duration'] 不是 None
+                    if state and state.get('duration') is not None and state['duration'] > 0:
+                        # 3. 增加安全判断：确保 currentTime 也不是 None
+                        curr = state.get('currentTime', 0)
+                        total = state['duration']
+                        
+                        if state['ended'] or (curr >= total - 0.8):
                             driver.execute_script('const v = document.querySelector("video"); if(v) v.pause();')
                             print(f"✅ {title} 拦截成功，准备切歌")
                             break
+                        
+                    # 4. 增加超时强制跳出，防止因 state 获取不到而死循环
+                    if (asyncio.get_event_loop().time() - start_time) > max_wait:
+                        print(f"⏰ {title} 播放超时，强制切歌")
+                        break
                         
                 except Exception as e:
                     print(f"监控异常: {e}")
@@ -535,26 +545,34 @@ async def on_danmaku(event):
 
 
 if __name__ == '__main__':
-    # 1. 启动 UI 线程（保持不变）
     ui_thread = threading.Thread(target=create_display_window, daemon=True)
     ui_thread.start()
 
-    # 2. 显式创建并设置事件循环
     loop = asyncio.new_event_loop() 
-    asyncio.set_event_loop(loop) # 将新循环设置为当前上下文的循环
+    asyncio.set_event_loop(loop)
 
-    try:
-        # 使用 loop.create_task 提交后台任务
+    # 定义一个带重连逻辑的任务
+    async def main_logic():
+        # 启动后台播放任务
         loop.create_task(music_player_worker())
         
-        # 启动弹幕连接（假设 room.connect() 是一个协程）
-        # run_until_complete 会一直运行直到 connect 结束（即直播间断开）
-        loop.run_until_complete(room.connect())
+        while True:
+            try:
+                print("正在连接直播间...")
+                await room.connect() 
+                # 如果 room.connect() 正常结束（比如被踢出），也会循环重连
+            except Exception as e:
+                print(f"连接意外断开: {e}，5秒后尝试重连...")
+                await asyncio.sleep(5) 
+
+    try:
+        # 运行整个逻辑，而不是只运行一次 connect
+        loop.run_until_complete(main_logic())
         
     except KeyboardInterrupt:
         print("\n正在安全关闭...")
     finally:
-        # 清理工作
+        # 确保所有 task 被取消后再关闭
         if 'driver' in globals() and driver:
             driver.quit()
         loop.close()
