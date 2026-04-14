@@ -100,6 +100,8 @@ song_list = []  # 用于界面显示的列表
 current_song_text = ""
 driver = None
 skip_event = asyncio.Event() # 用于“切歌0”时立即切歌
+# 定义一个全局锁
+skip_lock = asyncio.Lock()
 
 def smart_truncate(text, max_px, current_font):
     """
@@ -503,39 +505,44 @@ async def on_danmaku(event):
         elif content.startswith("切歌"):
             # 只要是主播或者房管，就可以执行
             if has_privilege:
-                # 匹配 "切歌" 或 "切歌 N"
-                match = re.match(r'^切歌\s*(\d+)$', content)
-                
-                # 情况 A：直接发送 "切歌"，默认切掉当前正在播放的 (等同于 切歌 0)
-                if content.strip() == "切歌":
-                    if song_queue_data:
-                        print(f"🛑 管理员 {user_name} 切歌: {song_list[0]}")
-                        skip_event.set() 
-                    else:
-                        print("⚠️ 当前没有正在播放的歌曲")
-                
-                # 情况 B：发送 "切歌 N"，删除队列中的某首歌
-                elif match:
-                    try:
-																						
-                        index = int(match.group(1))
-															  
-                        if index == 0:
-                            if song_queue_data:
-                                print(f"🛑 管理员 {user_name} 停止了当前播放")
-																							 
-                                skip_event.set()
-																	
-                        elif 1 <= index < len(song_list):
-                            removed_song = song_list.pop(index)
-                            song_queue_data.pop(index)
-															   
-                            print(f"【系统】管理员 {user_name} 已删除第 {index} 首：{removed_song}")
-																
+                if skip_lock.locked():
+                    await send_broadcast(f"@{user_name} ⚠️ 指令频繁：切歌请求已被忽略")
+                    return
+                async with skip_lock:
+                    # 匹配 "切歌" 或 "切歌 N"
+                    match = re.match(r'^切歌\s*(\d+)$', content)
+                    
+                    # 情况 A：直接发送 "切歌"，默认切掉当前正在播放的 (等同于 切歌 0)
+                    if content.strip() == "切歌":
+                        if song_queue_data:
+                            print(f"🛑 管理员 {user_name} 切歌: {song_list[0]}")
+                            skip_event.set() 
                         else:
-                            print(f"【错误】序号 {index} 超出队列范围")
-                    except ValueError:
-                        pass
+                            print("⚠️ 当前没有正在播放的歌曲")
+                    
+                    # 情况 B：发送 "切歌 N"，删除队列中的某首歌
+                    elif match:
+                        try:
+                                                                                            
+                            index = int(match.group(1))
+                                                                  
+                            if index == 0:
+                                if song_queue_data:
+                                    print(f"🛑 管理员 {user_name} 停止了当前播放")
+                                                                                                 
+                                    skip_event.set()
+                                                                        
+                            elif 0 < index < len(song_list) and index < len(song_queue_data):
+                                removed_song = song_list.pop(index)
+                                song_queue_data.pop(index)
+                                                                   
+                                print(f"【系统】管理员 {user_name} 已删除第 {index} 首：{removed_song}")
+                                                                    
+                            else:
+                                print(f"【错误】序号 {index} 超出队列范围")
+                        except ValueError:
+                            pass
+                    await asyncio.sleep(2)
             else:
                 print(f"权限不足：用户 {user_name} 尝试切歌但不是房管")
 
