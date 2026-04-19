@@ -103,6 +103,49 @@ skip_event = asyncio.Event() # 用于“切歌0”时立即切歌
 # 定义一个全局锁
 skip_lock = asyncio.Lock()
 
+
+QUEUE_FILE = "song_queue.txt"
+
+def save_queue_to_file():
+    temp_file = QUEUE_FILE + ".tmp"
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            for item in song_queue_data:
+                f.write(f"{item[0]},{item[3]}\n")
+            f.flush()
+            os.fsync(f.fileno())
+        
+        # 写入成功后，原子性替换旧文件
+        # 在 Windows 上需要先删除旧的才能 rename
+        if os.path.exists(QUEUE_FILE):
+            os.remove(QUEUE_FILE)
+        os.rename(temp_file, QUEUE_FILE)
+        
+    except Exception as e:
+        print(f"💾 紧急保存失败: {e}")
+
+async def load_queue_from_file(credential):
+    """从 txt 读取并重新填充内存变量"""
+    if not os.path.exists(QUEUE_FILE):
+        return
+
+    print("📂 正在从文件恢复历史歌单...")
+    with open(QUEUE_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    for line in lines:
+        if "," not in line: continue
+        bv_id, p_index = line.strip().split(",")
+        try:
+            # 重新获取歌曲详细数据
+            song_item = await get_song_data(bv_id, int(p_index), credential, 999, "系统恢复", is_quiet=True)
+            if song_item:
+                song_queue_data.append(song_item)
+                song_list.append(song_item[1]) # item[1] 通常是标题
+        except Exception as e:
+            print(f"❌ 恢复失败 {bv_id}: {e}")
+
+
 def smart_truncate(text, max_px, current_font):
     """
     根据像素宽度截断字符串
@@ -277,7 +320,11 @@ async def get_song_data(bv_id, p_index, credential, max_min_config, user_name, i
 async def music_player_worker():
     global driver
     try:
-        driver = webdriver.Chrome()
+        options = webdriver.ChromeOptions()
+        # 核心参数：绕过自动播放限制
+        options.add_argument("--autoplay-policy=no-user-gesture-required")
+
+        driver = webdriver.Chrome(options=options)
         # 同步登录态 (逻辑保持不变)
         driver.get("https://www.bilibili.com")
         driver.add_cookie({'name': 'SESSDATA', 'value': SESSDATA, 'domain': '.bilibili.com', 'path': '/'})
@@ -314,8 +361,9 @@ async def music_player_worker():
                         if song_item:
                             final_title = song_item[1]
                             song_queue_data.append(song_item)
-                            song_list.append(final_title)         
+                            song_list.append(final_title)
                             print(f"💡 自动补位成功: {final_title}")
+                            save_queue_to_file() # <--- 实时保存
                         
                     except Exception as e:
                         print(f"❌ 自动补位失败({bv_id}): {e}")
@@ -343,33 +391,49 @@ async def music_player_worker():
             continue
         
         try:
-            url = f"https://www.bilibili.com/video/{bv_id}?p={p_index}"
+            url = f"https://www.bilibili.com/video/{bv_id}?p={p_index}&t=0"
             print(f"▶{title} (第{p_index}P)")
             driver.get(url)
             
-            # --- 步骤 1: 注入初始化脚本 (尝试关闭原生开关) ---
-            await asyncio.sleep(2) 
-            try:
-                driver.execute_script('''
-                    // 1. 强制关闭 B 站自带的自动连播按钮 (UI 层)
-                    const autoBtn = document.querySelector('.bpx-player-ctrl-next-autoswitch input');
-                    if (autoBtn && autoBtn.checked) autoBtn.click();
+            # --- 步骤 2: 立即注入 (不要等待) ---
+            # 使用 try-except 包裹，因为此时页面可能还没完全加载出 video 标签
+            for _ in range(3): # 循环注入 3 次，确保能抓到刚生成的 video 元素
+                try:
+                    driver.execute_script("""
+                        (function() {
+                            const video = document.querySelector('video');
+                            if (!video) return;
 
-                    // 2. 核心：重写播放器“播放结束”的回调逻辑，防止它自动跳转
-                    if (window.player && window.player.setOptions) {
-                        window.player.setOptions({
-                            playlist: {
-                                auto_play: false // 尝试关闭播放列表自动播放
-                            }
-                        });
-                    }
+                            video.muted = true; // 进场静音
 
-                    // 3. 拦截跳转：如果页面尝试跳转（多P切换通常会刷新或改变 URL），弹出警告
-                    // 虽然 Selenium 无法点掉确认框，但可以阻止瞬间跳转
-                    // window.onbeforeunload = function() { return "拦截跳转"; };
-                ''')
-            except:
-                pass
+                            let checkTimer = setInterval(() => {
+                                // 当视频开始有动作时
+                                if (video.currentTime > 0) {
+                                    // 1. 如果检测到历史进度，强制回滚
+                                    if (video.currentTime > 2) {
+                                        video.currentTime = 0;
+                                        console.log("重置进度");
+                                    }
+
+                                    // 2. 核心补丁：无论如何，归零后确保它是播放状态
+                                    // 延迟一小会儿执行，防止和归零操作打架
+                                    setTimeout(() => {
+                                        if (video.paused) {
+                                            video.play().catch(e => console.log("等待交互播放..."));
+                                        }
+                                        video.muted = false; // 恢复声音
+                                        console.log("强制起飞");
+                                    }, 500);
+
+                                    clearInterval(checkTimer);
+                                }
+                            }, 200);
+                        })();
+                    """)
+                    break # 注入成功则跳出循环
+                except:
+                    import time
+                    time.sleep(0.2) # 如果失败，极短时间后重试
 
             skip_event.clear()
             
@@ -422,6 +486,7 @@ async def music_player_worker():
                 song_queue_data.pop(0) 
             if song_list: 
                 song_list.pop(0)
+            save_queue_to_file() # <--- 实时保存
             # 播放下一首前的缓冲，给观众看一眼结束画面
             await asyncio.sleep(1) 
 
@@ -464,9 +529,10 @@ async def on_danmaku(event):
         is_vip = privilege_type > 0 # 是否是舰长以上
         
         # --- 点歌/插歌逻辑 (保持不变) ---
-				
-        if content.startswith("点歌 ") or content.startswith("插歌 "):		 
-															  
+        if content.startswith("插歌") and not is_vip:
+            await send_broadcast(f"@{user_name} ❌ 只有舰长以上可使用插歌功能哦~")		
+        elif content.startswith("点歌 ") or content.startswith("插歌 "):	
+
             pattern = r"(BV[a-zA-Z0-9]+)(?:\s*[pP_](\d+))?"
             match = re.search(pattern, content, re.IGNORECASE)            
 
@@ -490,11 +556,13 @@ async def on_danmaku(event):
                     if content.startswith("点歌"):
                         song_queue_data.append(song_item)
                         song_list.append(final_title)         
-                        print(f"📩 {user_name}点歌 {final_title}")               
+                        print(f"📩 {user_name}点歌 {final_title}") 
+                        save_queue_to_file() # <--- 实时保存              
                     elif is_vip and content.startswith("插歌"):
                         song_queue_data.insert(1, song_item)
                         song_list.insert(1, final_title)             
                         print(f"📩 {user_name}插歌 {final_title}")   
+                        save_queue_to_file() # <--- 实时保存         
             except Exception as v_err:
 															   
                 print(f"❌ 视频 {bv_id} 无效或解析失败: {v_err}")
@@ -537,6 +605,7 @@ async def on_danmaku(event):
                                 song_queue_data.pop(index)
                                                                    
                                 print(f"【系统】管理员 {user_name} 已删除第 {index} 首：{removed_song}")
+                                save_queue_to_file() # <--- 实时保存         
                                                                     
                             else:
                                 print(f"【错误】序号 {index} 超出队列范围")
@@ -560,6 +629,12 @@ if __name__ == '__main__':
 
     # 定义一个带重连逻辑的任务
     async def main_logic():
+        # --- 新增：启动时加载本地缓存 ---
+        try:
+            # 确保传入 load 逻辑所需的参数（如 credential）
+            await load_queue_from_file(credential)
+        except Exception as e:
+            print(f"📂 恢复歌单时出错: {e}")
         # 启动后台播放任务
         loop.create_task(music_player_worker())
         
