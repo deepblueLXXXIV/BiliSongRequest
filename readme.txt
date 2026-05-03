@@ -46,5 +46,7 @@ python -m PyInstaller -D --collect-all bilibili_api --collect-all selenium .\弹
 （测试加--debug=all ）
 双击运行exe同上，配置config.json（用于无python环境运行）
 
+重要：请确保解压后的文件夹路径中不包含中文、空格或特殊字符
+
 如果出错报错信息会在同目录的crash_report文件中
 song_queue文件会实时存储当前歌单，非正常退出之后重启会自动续播上次歌单
